@@ -140,7 +140,7 @@ for layer_number, polygons in layers.items():
         # this confuses the triangulation library, which fills the holes
         # with extra triangles. Avoid this by moving each edge back a
         # very small amount so that no two edges of the same polygon overlap.
-        delta = 0.001 # inset each vertex by this much
+        delta = 0.01 # inset each vertex by this much (smaller has broken one file)
         points_i = polygon # get list of points
         points_j = np.roll(points_i, -1, axis=0) # shift by 1
         points_k = np.roll(points_i, 1, axis=0) # shift by -1

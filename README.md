@@ -6,7 +6,7 @@ GDSII files are often large, complex 2D designs for integrated circuits and MEMS
 
 # Installation
 
-Install Python 3 and its package manager (`pip`), then install:
+Install git and Python 3 and its package manager (`pip`), then install:
 
 ```
 pip install numpy
@@ -43,7 +43,7 @@ Many programs are capable of viewing the output STL files. Blender (https://www.
 
 ## Note
 
-Due to a limitation of the library used to triangulate the polygonal boundaries of the GDSII geometry, the polygon borders (i.e., all geometry) are shifted slightly (by a hardcoded delta of about 0.001 units, or a nanometer in standard micron units) before export. Furthermore, due to another related limitation/bug (not yet completely understood; see source code comments), extra triangles are sometimes created covering holes in polygons.
+Due to a limitation of the library used to triangulate the polygonal boundaries of the GDSII geometry, the polygon borders (i.e., all geometry) are shifted slightly (by a hardcoded delta of about 0.01 units, or 10 nanometers in standard micron units) before export. Furthermore, due to another related limitation/bug (not yet completely understood; see source code comments), extra triangles are sometimes created covering holes in polygons.
 
 So the output mesh is not guaranteed to be watertight, perfectly dimensioned, or retain all polygon holes, but it should be arbitrarily close and err on the side of extra triangles, so a program (e.g., Blender) can edit the mesh by deleting faces and produce a negligibly-far-from perfect visualization.
 
