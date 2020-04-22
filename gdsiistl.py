@@ -159,11 +159,38 @@ for layer_number, polygons in layers.items():
         # move each vertex inward along its two edge normals
         polygon = points_i - delta*normal_ij - delta*normal_ik
 
+        # In an extreme case of the above, the polygon edge doubles back on
+        # itself on the same line, resulting in a zero-width segment. I've
+        # seen this happen, e.g., with a capital "N"-shaped hole, where
+        # the hole split line cuts out the "N" shape but splits apart to
+        # form the triangle cutout in one side of the shape. In any case,
+        # simply moving the polygon edges isn't enough to deal with this;
+        # we'll additionally mark points just outside of each edge, between
+        # the original edge and the delta-shifted edge, as outside the polygon.
+        # These parts will be removed from the triangulation, and this solves
+        # just this case with no adverse affects elsewhere.
+        hole_delta = 0.001 # small fraction of delta
+        holes = 0.5*(points_j+points_i) - hole_delta*delta*normal_ij
+        # HOWEVER: sometimes this causes a segmentation fault in the triangle
+        # library. I've observed this as a result of certain various polygons.
+        # Frustratingly, the fault can be bypassed by *rotating the polygons*
+        # by like 30 degrees (exact angle seems to depend on delta values) or
+        # moving one specific edge outward a bit. I have absolutely no idea
+        # what is wrong. In the interest of stability over full functionality,
+        # this is disabled. TODO: figure out why this happens and fix it.
+        use_holes = False
+
         # triangulate: compute triangles to fill polygon
         point_array = np.arange(num_polygon_points)
         edges = np.transpose(np.stack((point_array, np.roll(point_array, 1))))
-        triangles = triangle.triangulate(dict(vertices=polygon,
-                                              segments=edges), opts='p')
+        if use_holes:
+            triangles = triangle.triangulate(dict(vertices=polygon,
+                                                  segments=edges,
+                                                  holes=holes), opts='p')
+        else:
+            triangles = triangle.triangulate(dict(vertices=polygon,
+                                                  segments=edges), opts='p')
+
         if not 'triangles' in triangles.keys():
             triangles['triangles'] = []
 
@@ -245,13 +272,16 @@ for layer in layers:
         # make a list of polygon interior (face) triangles
         vs = triangles['vertices']
         ts = triangles['triangles']
-        face_tris = np.take(vs, ts, axis=0)
-        top = np.insert(face_tris, 2, zmax, axis=2) # list of top triangles
-        bottom = np.insert(face_tris, 2, zmin, axis=2) # list of bottom ~
-        bottom = np.flip(bottom, axis=1) # reverse vertex order to make CCW
+        if len(ts) > 0:
+            face_tris = np.take(vs, ts, axis=0)
+            top = np.insert(face_tris, 2, zmax, axis=2) # list of top triangles
+            bottom = np.insert(face_tris, 2, zmin, axis=2) # list of bottom ~
+            bottom = np.flip(bottom, axis=1) # reverse vertex order to make CCW
+            faces = np.concatenate((lefts, rights, top, bottom), axis=0)
+        else: # didn't generate any triangles! (degenerate edge case)
+            faces = np.concatenate((lefts, rights), axis=0)
 
         # add side and face triangles to layer mesh
-        faces = np.concatenate((lefts, rights, top, bottom), axis=0)
         layer_mesh_data['vectors'][layer_pointer:(layer_pointer+len(faces))] = faces
         layer_pointer += len(faces)
 
