@@ -15,7 +15,7 @@ pip install numpy-stl
 pip install triangle
 ```
 
-The last module, triangle, compiles a C library, which may cause problems on Windows.
+The modules `gdspy` and `triangle` compile C libraries, which may cause trouble on Windows; it might require you to first install Microsoft Visual C++ Build Tools (e.g., from https://visualstudio.microsoft.com/downloads).
 
 Finally:
 
@@ -35,7 +35,7 @@ Concretely:
 
 ```
 cd gdsiistl
-python3 gdsiistl.py example/example.gds
+python gdsiistl.py example/example.gds
 # output files are example/example.gds_substrate.stl, etc.
 ```
 
