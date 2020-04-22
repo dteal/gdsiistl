@@ -141,20 +141,23 @@ for layer_number, polygons in layers.items():
         # with extra triangles. Avoid this by moving each edge back a
         # very small amount so that no two edges of the same polygon overlap.
         delta = 0.001 # inset each vertex by this much
-        for i, v1 in enumerate(polygon):
-            # calculate unit normal 2D vectors to each edge of a vertex
-            v2 = polygon[(i+1) % num_polygon_points]
-            v3 = polygon[(i-1) % num_polygon_points]
-            normal2 = np.array([v2[1]-v1[1], v1[0]-v2[0]])
-            normal2 /= np.linalg.norm(normal2)
-            normal3 = np.array([v1[1]-v3[1], v3[0]-v1[0]])
-            normal3 /= np.linalg.norm(normal3)
-            if clockwise:
-                normal2 = -normal2
-                normal3 = -normal3
-            # move vertex back along both normals
-            polygon[i] = [v1[0] - normal2[0]*delta - normal3[0]*delta,
-                          v1[1] - normal2[1]*delta - normal3[1]*delta]
+        points_i = polygon # get list of points
+        points_j = np.roll(points_i, -1, axis=0) # shift by 1
+        points_k = np.roll(points_i, 1, axis=0) # shift by -1
+        # calculate normals for each edge of each vertex (in parallel, for speed)
+        normal_ij = np.stack((points_j[:, 1]-points_i[:, 1],
+                              points_i[:, 0]-points_j[:, 0]), axis=1)
+        normal_ik = np.stack((points_i[:, 1]-points_k[:, 1],
+                              points_k[:, 0]-points_i[:, 0]), axis=1)
+        length_ij = np.linalg.norm(normal_ij, axis=1)
+        length_ik = np.linalg.norm(normal_ik, axis=1)
+        normal_ij /= np.stack((length_ij, length_ij), axis=1)
+        normal_ik /= np.stack((length_ik, length_ik), axis=1)
+        if clockwise:
+            normal_ij = -1*normal_ij
+            normal_ik = -1*normal_ik
+        # move each vertex inward along its two edge normals
+        polygon = points_i - delta*normal_ij - delta*normal_ik
 
         # triangulate: compute triangles to fill polygon
         point_array = np.arange(num_polygon_points)
