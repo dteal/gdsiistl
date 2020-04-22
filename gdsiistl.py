@@ -12,6 +12,9 @@ OUTPUT:
 The program takes one argument, a path to a GDSII file. It reads shapes from
 each layer of the GDSII file, converts them to polygon boundaries, then makes
 a triangle mesh for each GDSII layer by extruding the polygons to given sizes.
+
+All units, including the units of the exported file, are the GDSII file's
+user units (often microns).
 """
 
 import sys # read command-line arguments
@@ -38,12 +41,17 @@ layerstack = {
 
 ########## INPUT ##############################################################
 
-print('reading GDSII file {}...'.format(gdsii_file_path))
+# First, the input file is read using the gdspy library, which interprets the
+# GDSII file and formats the data Python-style.
+# See https://gdspy.readthedocs.io/en/stable/index.html for documentation.
+# Second, the boundaries of each shape (polygon or path) are extracted for
+# further processing.
+
+print('Reading GDSII file {}...'.format(gdsii_file_path))
 gdsii = gdspy.GdsLibrary()
 gdsii.read_gds(gdsii_file_path, units='import')
-# see https://gdspy.readthedocs.io/en/stable/index.html for documentation
 
-print('extracting polygons...')
+print('Extracting polygons...')
 layers = {} # array to hold all geometry, sorted into layers
 
 cells = gdsii.top_level() # get all cells that aren't referenced by another
@@ -87,7 +95,7 @@ layers = {
 
 Each dictionary key is a GDSII layer number (0-255), and the value of the
 dictionary at that key (if it exists; keys were only created for layers with
-geometry) is a list of polygons in that GDSII layer. Each polygon is a 2-tuple
+geometry) is a list of polygons in that GDSII layer. Each polygon is a 3-tuple
 whose first element is a list of points (2-element lists with x and y
 coordinates), second element is None (for the moment; this will be used later),
 and third element is False (whether the polygon is clockwise; will be updated).
@@ -95,7 +103,14 @@ and third element is False (whether the polygon is clockwise; will be updated).
 
 ########## TRIANGULATION ######################################################
 
-print('triangulating polygons...')
+# An STL file is a list of triangles, so the polygons need to be filled with
+# triangles. This is a surprisingly hard algorithmic problem, especially since
+# there are few limits on what shapes GDSII file polygons can be. So we use the
+# Python triangle library (documentation is at https://rufat.be/triangle/),
+# which is a Python interface to a fast and well-written C library also called
+# triangle (with documentation at https://www.cs.cmu.edu/~quake/triangle.html).
+
+print('Triangulating polygons...')
 
 num_triangles = {} # will store the number of triangles for each layer
 
@@ -155,9 +170,38 @@ for layer_number, polygons in layers.items():
                                        len(triangles['triangles'])*2
         polygons[index] = (polygon, triangles, clockwise)
 
+"""
+At this point, "layers" is as follows:
+
+layers = {
+   0 : [ ([[x1, y1], [x2, y2], ...],
+          {'vertices': [[x1, y1], ...], 'triangles': [[0, 1, 2], ...], ...},
+          clockwise), ... ]
+   1 : [ ... ]
+   2 : [ ... ]
+   ...
+}
+
+Each dictionary key is a GDSII layer number (0-255), and the value of the
+dictionary at that key (if it exists; keys were only created for layers with
+geometry) is a list of polygons in that GDSII layer. Each polygon has 3 parts:
+First, a list of vertices, as before. Second, a dictionary with triangulation
+information: the 'vertices' element contains vertex information stored the
+same way as the main polygon vertices, and the 'triangles' element is a list
+of which vertices correspond to which triangle (in counterclockwise order).
+Third and finally, a boolean value that indicates whether the polygon was
+defined clockwise (so that the STL triangles are oriented correctly).
+"""
+
 ########## EXTRUSION ##########################################################
 
-print('extruding polygons...')
+# Finally, now that we have polygon boundaries and triangulations, we can
+# write it to an STL file. To make this fast (given there could be tens of
+# thousands of triangles), we use the numpy-stl library, which uses numpy
+# for somewhat accelerated vector math. See the documentation at
+# (https://numpy-stl.readthedocs.io/en/latest/)
+
+print('Extruding polygons and writing to files...')
 
 # loop through all layers
 for layer in layers:
@@ -166,35 +210,52 @@ for layer in layers:
     if not layer in layerstack.keys():
         continue
 
-    # make a list of triangles
+    # Make a list of triangles.
+    # This data contains vertex xyz position data as follows:
+    # layer_mesh_data['vectors'] = [ [[x1,y1,z1], [x2,y2,z1], [x3,y3,z3]], ...]
     layer_mesh_data = np.zeros(num_triangles[layer], dtype=mesh.Mesh.dtype)
-    layer_pointer = 0
 
+    layer_pointer = 0
     for index, (polygon, triangles, clockwise) in enumerate(layers[layer]):
+
+        # The numpy-stl library expects counterclockwise triangles. That is,
+        # one side of each triangle is the outside surface of the STL file
+        # object (assuming a watertight volume), and the other side is the
+        # inside surface. If looking at a triangle from the outside, the
+        # vertices should be in counterclockwise order. Failure to do so may
+        # cause certain STL file display programs to not display the
+        # triangles correctly (e.g., the backward triangles will be invisible).
 
         zmin, zmax, layername = layerstack[layer]
 
-        points_i = polygon
-        points_i_min = np.insert(points_i, 2, zmin, axis=1)
-        points_i_max = np.insert(points_i, 2, zmax, axis=1)
-        points_j_min = np.roll(points_i_min, 1, axis=0)
-        points_j_max = np.roll(points_i_max, 1, axis=0)
-        lefts = np.stack((points_i_min, points_j_min, points_i_max), axis=1)
-        rights = np.stack((points_j_min, points_j_max, points_i_max), axis=1)
+        # make a list of triangles around the polygon boundary
+        points_i = polygon # list of 2D vertices
+        if clockwise: # order polygon 2D vertices counter-clockwise
+            points_i = np.flip(polygon, axis=0)
+        points_i_min = np.insert(points_i, 2, zmin, axis=1) # bottom left
+        points_i_max = np.insert(points_i, 2, zmax, axis=1) # top left
+        points_j_min = np.roll(points_i_min, -1, axis=0) # bottom right
+        points_j_max = np.roll(points_i_max, -1, axis=0) # top right
+        rights = np.stack((points_i_min, points_j_min, points_j_max), axis=1)
+        lefts = np.stack((points_j_max, points_i_max, points_i_min), axis=1)
+
+        # make a list of polygon interior (face) triangles
         vs = triangles['vertices']
         ts = triangles['triangles']
-
         face_tris = np.take(vs, ts, axis=0)
-        top = np.insert(face_tris, 2, zmax, axis=2)
-        bottom = np.insert(face_tris, 2, zmin, axis=2)
+        top = np.insert(face_tris, 2, zmax, axis=2) # list of top triangles
+        bottom = np.insert(face_tris, 2, zmin, axis=2) # list of bottom ~
+        bottom = np.flip(bottom, axis=1) # reverse vertex order to make CCW
 
+        # add side and face triangles to layer mesh
         faces = np.concatenate((lefts, rights, top, bottom), axis=0)
-        #faces = np.concatenate((lefts, rights), axis=0)
-        num = len(faces)
         layer_mesh_data['vectors'][layer_pointer:(layer_pointer+len(faces))] = faces
         layer_pointer += len(faces)
 
     # save layer to STL file
-    print('writing layer {} to file...'.format(layername))
+    filename = gdsii_file_path + '_{}.stl'.format(layername)
+    print('    ({}, {}) to {}'.format(layer, layername, filename))
     layer_mesh_object = mesh.Mesh(layer_mesh_data, remove_empty_areas=False)
-    layer_mesh_object.save(gdsii_file_path + '_{}.stl'.format(layername))
+    layer_mesh_object.save(filename)
+
+print('Done.')
